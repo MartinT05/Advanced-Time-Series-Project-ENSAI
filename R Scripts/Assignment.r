@@ -125,3 +125,41 @@ export <- final_data %>%
   transmute(date = format(observation_date, "%Y-%m-%d"),
             DGS10, d_bps, v, v_abs, regime, calendar_gap, holiday_gap)
 write.csv(export, "Data Files/dgs10_clean.csv", row.names = FALSE)
+
+regimes <- data.frame(
+  start = as.Date(c("1979-10-06", "2008-12-16", "2020-03-15")),
+  end   = as.Date(c("1982-10-31", "2015-12-16", "2022-03-16")),
+  label = c("Volcker", "ZLB", "ZLB"))
+
+panel <- function(y, title, ylab, bottom = FALSE, label_regimes = FALSE) {
+  plot(final_data$observation_date, y, type = "n", xaxt = "n",
+       xlab = "", ylab = ylab)
+  title(main = title, adj = 0, cex.main = 1.1)
+  u <- par("usr")
+  rect(as.numeric(regimes$start), u[3], as.numeric(regimes$end), u[4],
+       col = adjustcolor("grey70", alpha.f = 0.45), border = NA)   # regime shading
+  lines(final_data$observation_date, y, lwd = 0.6)
+  if (label_regimes)
+    text(as.numeric(regimes$start + (regimes$end - regimes$start) / 2),
+         u[4] - 0.08 * (u[4] - u[3]), regimes$label, cex = 0.8, col = "grey30")
+  yrs <- seq(as.Date("1965-01-01"), as.Date("2025-01-01"), by = "5 years")
+  axis(1, at = yrs, labels = if (bottom) format(yrs, "%Y") else FALSE)
+}
+
+draw_data_slide <- function() {
+  par(mfrow = c(3, 1), mar = c(1, 5, 2.2, 1), oma = c(2, 0, 0, 0))
+  panel(final_data$DGS10, "Level: non-stationary (unit root)", "%",
+        label_regimes = TRUE)
+  panel(final_data$d_bps, "Daily change: stationary, with volatility clustering",
+        "bps")
+  abline(h = 0, col = "grey50")
+  panel(final_data$v, "Squared change: persistent volatility (FARIMA input)",
+        expression(bps^2), bottom = TRUE)
+}
+
+draw_data_slide()                                     # preview in RStudio
+
+dir.create("Figures", showWarnings = FALSE)           # save for the slides (16:9)
+png("Figures/data_overview.png", width = 13.33, height = 7.5, units = "in", res = 200)
+draw_data_slide()
+dev.off()
