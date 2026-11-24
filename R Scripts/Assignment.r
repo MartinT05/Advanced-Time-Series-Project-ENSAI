@@ -67,7 +67,7 @@ pacf(final_data$d_DGS10, main = "10Y US TS Volatility, vi")
 
 final_data <- final_data %>%
   mutate(d_bps = round(100 * d_DGS10),           # integer bps
-         v     = abs(d_bps),                      # volatility proxy
+         v     = (d_bps)^2,                      # volatility proxy (squared)
          year  = year(observation_date),
          holiday_gap = as.integer(!(calendar_gap %in% c(1, 3))))
 
@@ -78,8 +78,8 @@ final_data %>% group_by(year) %>%
 
 # 2. Long-memory diagnostics on v
 par(mfrow = c(3, 1))
-plot(final_data$v, type = "l", main = "|Δi| (bps)")
-acf(final_data$v, lag.max = 500, main = "ACF of |Δi|")
+plot(final_data$v, type = "l", main = "(Δi)^2 (bps)")
+acf(final_data$v, lag.max = 500, main = "ACF of (Δi)^2")
 r <- acf(final_data$v, lag.max = 1000, plot = FALSE)$acf[-1]
 plot(log(1:1000), log(pmax(r, 1e-4)), xlab = "log h", ylab = "log ACF",
      main = "log-log ACF (slope ≈ 2d − 1)")
