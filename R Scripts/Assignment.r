@@ -83,3 +83,6 @@ acf(final_data$v, lag.max = 500, main = "ACF of |Δi|")
 r <- acf(final_data$v, lag.max = 1000, plot = FALSE)$acf[-1]
 plot(log(1:1000), log(pmax(r, 1e-4)), xlab = "log h", ylab = "log ACF",
      main = "log-log ACF (slope ≈ 2d − 1)")
+
+
+# Ciao sono Giovanni 
