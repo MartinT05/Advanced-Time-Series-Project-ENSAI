@@ -1,6 +1,6 @@
 rm(list = ls())
 
-data <- read.csv("Project/DGS10.csv")
+data <- read.csv("Data Files/DGS10.csv")
 View(data)
 
 anyNA(data)
