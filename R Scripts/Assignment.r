@@ -10,11 +10,12 @@ sum(is.na(data))
 which(is.na(data[[1]]))
 
 par(mfrow = c(1,1))
-plot(data$DGS10, main = "10Y YS TS Series", type = "l")
+plot(data$DGS10, main = "10Y YS TS Yield Series", type = "l")
 
 library(dplyr)
 library(lubridate)
 
+stopifnot(!anyNA(data$observation_date))   # mdy() failures would otherwise be dropped silently
 # Parsing date format for SIFMA trading calendar index
 data <- data %>%
   mutate(
@@ -57,34 +58,108 @@ data_clean <- data_clean %>%
 # Drop the first row (1962-01-02), which has NA for d_DGS10
 final_data <- data_clean %>% filter(!is.na(d_DGS10))
 
-plot(final_data$d_DGS10, main = "10Y US TS Volatility, vi (first diff., clean)", type = "l")
+plot(final_data$d_DGS10, main = "10Y US TS Yield Changes", type = "l")
 
 library(tseries)
 par(mfrow = c(3,1))
-plot(final_data$d_DGS10, main = "10Y US TS Volatility, vi (first diff., clean)", type = "l")
-acf(final_data$d_DGS10, main = "10Y US TS Volatility, vi")
-pacf(final_data$d_DGS10, main = "10Y US TS Volatility, vi")
+plot(final_data$d_DGS10, main = "10Y US TS Yield Changes", type = "l")
+acf(final_data$d_DGS10, main = "10Y US TS Yield changes, ACF")
+pacf(final_data$d_DGS10, main = "10Y US TS Yield changes, PACF")
 
 final_data <- final_data %>%
-  mutate(d_bps = round(100 * d_DGS10),           # integer bps
-         v     = d_bps**2,                      # volatility proxy
+  mutate(d_bps = round(100 * d_DGS10),           # integer bps (GARCH input)
+         v     = d_bps^2,                        # squared change (main FARIMA proxy)
+         v_abs = abs(d_bps),                     # absolute change (backup proxy)
          year  = year(observation_date),
-         holiday_gap = as.integer(!(calendar_gap %in% c(1, 3))))
+         holiday_gap = as.integer(!(calendar_gap %in% c(1, 3))),
+         regime = case_when(
+           observation_date <  as.Date("1979-10-06") ~ "pre_volcker",
+           observation_date <= as.Date("1982-10-31") ~ "volcker",
+           observation_date >= as.Date("2008-12-16") &
+           observation_date <= as.Date("2015-12-16") ~ "zlb1",
+           observation_date >= as.Date("2020-03-15") &
+           observation_date <= as.Date("2022-03-16") ~ "zlb2",
+           TRUE ~ "normal"))
 
-# 1. Zeros by year: decide the start date
+# Zeros by year: decide the start date
 final_data %>% group_by(year) %>%
   summarise(share_zero = mean(d_bps == 0), sd_bps = sd(d_bps)) %>%
   print(n = 70)
 
-# 2. Long-memory diagnostics on v
+START <- as.Date("1966-01-01")
+# 1963-65: 47-58% of daily changes are exactly 0 and sd ~1 bp, i.e. below the
+# 1 bp recording precision -> volatility not measurable; sample starts 1966
+# (share of zeros <= 17%, sd >= 3 bps thereafter). Drops ~1,000 of ~16,200 obs.
+final_data <- final_data %>% filter(observation_date >= START)
+
+# Figure for the data section: level, change, squared change
 par(mfrow = c(3, 1))
-plot(final_data$v, type = "l", main = "squared Δi (bps)")
-acf(final_data$v, lag.max = 500, main = "ACF of Δi squared")
-r <- acf(final_data$v, lag.max = 1000, plot = FALSE)$acf[-1]
-plot(log(1:1000), log(pmax(r, 1e-4)), xlab = "log h", ylab = "log ACF",
-     main = "log-log ACF (slope ≈ 2d − 1)")
+plot(final_data$observation_date, final_data$DGS10, type = "l",
+     main = "10Y Treasury yield (%)", xlab = "", ylab = "%")
+plot(final_data$observation_date, final_data$d_bps, type = "l",
+     main = "Daily change in 10Y yield (bps)", xlab = "", ylab = "bps")
+plot(final_data$observation_date, final_data$v, type = "l",
+     main = "Squared daily change, volatility proxy (bps^2)", xlab = "", ylab = "bps^2")
 
+# Sanity check: do the largest moves correspond to known large events?
+final_data %>% arrange(desc(v)) %>% select(observation_date, DGS10, d_bps) %>% head(20)
+# Top-20 moves are genuine events, not data errors (checked against news/Fed sources):
+#  - 18/20 fall in the Volcker reserve-targeting regime (Oct 1979 - Oct 1982),
+#    e.g. Feb 1980 bond sell-off, Mar-Apr 1980 credit controls, 17 Aug 1982 Kaufman rally
+#  - 1987-10-20: day after Black Monday crash (flight to Treasuries)
+#  - 2009-03-18: FOMC announces $300bn Treasury purchases (QE1)
+# => Supports the 'volcker' regime dummy.
 
-# Ciao sono Giovanni 
+# Unit-root tests: justify differencing
+library(tseries)
+adf.test(final_data$DGS10);  kpss.test(final_data$DGS10)   # We expect unit root here (non-stationary)
+# Level: ADF p = 0.31 -> cannot reject H0 (unit root); KPSS p < 0.01 -> reject H0 (stationarity)
+# => the yield level is non-stationary (behaves like a random walk), so we model changes
 
+adf.test(final_data$d_bps);  kpss.test(final_data$d_bps)   # We expect no unit root here (stationary)
+# Changes: ADF p < 0.01 -> reject H0 (unit root); KPSS p > 0.10 -> cannot reject H0 (stationarity)
+# => daily changes are stationary; differencing once is sufficient (note: tseries ADF includes trend)
 
+# Export final shared file with ISO dates
+export <- final_data %>%
+  transmute(date = format(observation_date, "%Y-%m-%d"),
+            DGS10, d_bps, v, v_abs, regime, calendar_gap, holiday_gap)
+write.csv(export, "Data Files/dgs10_clean.csv", row.names = FALSE)
+
+regimes <- data.frame(
+  start = as.Date(c("1979-10-06", "2008-12-16", "2020-03-15")),
+  end   = as.Date(c("1982-10-31", "2015-12-16", "2022-03-16")),
+  label = c("Volcker", "ZLB", "ZLB"))
+
+panel <- function(y, title, ylab, bottom = FALSE, label_regimes = FALSE) {
+  plot(final_data$observation_date, y, type = "n", xaxt = "n",
+       xlab = "", ylab = ylab)
+  title(main = title, adj = 0, cex.main = 1.1)
+  u <- par("usr")
+  rect(as.numeric(regimes$start), u[3], as.numeric(regimes$end), u[4],
+       col = adjustcolor("grey70", alpha.f = 0.45), border = NA)   # regime shading
+  lines(final_data$observation_date, y, lwd = 0.6)
+  if (label_regimes)
+    text(as.numeric(regimes$start + (regimes$end - regimes$start) / 2),
+         u[4] - 0.08 * (u[4] - u[3]), regimes$label, cex = 0.8, col = "grey30")
+  yrs <- seq(as.Date("1965-01-01"), as.Date("2025-01-01"), by = "5 years")
+  axis(1, at = yrs, labels = if (bottom) format(yrs, "%Y") else FALSE)
+}
+
+draw_data_slide <- function() {
+  par(mfrow = c(3, 1), mar = c(1, 5, 2.2, 1), oma = c(2, 0, 0, 0))
+  panel(final_data$DGS10, "Level: non-stationary (unit root)", "%",
+        label_regimes = TRUE)
+  panel(final_data$d_bps, "Daily change: stationary, with volatility clustering",
+        "bps")
+  abline(h = 0, col = "grey50")
+  panel(final_data$v, "Squared change: persistent volatility (FARIMA input)",
+        expression(bps^2), bottom = TRUE)
+}
+
+draw_data_slide()                                     # preview in RStudio
+
+dir.create("Figures", showWarnings = FALSE)           # save for the slides (16:9)
+png("Figures/data_overview.png", width = 13.33, height = 7.5, units = "in", res = 200)
+draw_data_slide()
+dev.off()
